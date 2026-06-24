@@ -44,6 +44,7 @@ from config import (
     FEATURE_COLS,
 )
 from ai.rrt_calculator import calculate_rrt_score
+from db import get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -410,8 +411,39 @@ def run_synthetic_tick_if_due(
     updated["sequence"]         = sequences
     end_seq = int(sequences[-1]) if n else start_seq
 
-    # Step 6: Save live records
-    updated.to_csv(LIVE_RECORDS_FILE, index=False)
+    # Step 6: Save live records to MySQL
+    conn = get_connection()
+    cursor = conn.cursor()
+    for _, row in updated.iterrows():
+        cursor.execute("""
+           UPDATE live_future_records
+           SET name = %s, age = %s, ward = %s, block = %s, diagnosis = %s,
+            respiratory_rate=%s, spo2=%s, heart_rate=%s, systolic_bp=%s,
+            temperature=%s, avpu=%s, avpu_encoded=%s, current_rrt_score=%s,
+            rrt_category=%s, predicted_rrt_4hr=%s, predicted_rrt_8hr=%s,
+            last_recorded_at=%s, sequence=%s
+           WHERE patient_id = %s
+        """, (
+            row.get("name"),
+            row.get("age"),
+            row.get("ward"),
+            row.get("block"),
+            row.get("diagnosis"),
+            row.get("respiratory_rate"),
+            row.get("spo2"),
+            row.get("heart_rate"),
+            row.get("systolic_bp"),
+            row.get("temperature"),
+            row.get("avpu"),
+            row.get("avpu_encoded"),
+            row.get("current_rrt_score"),
+            row.get("rrt_category"),
+            row.get("predicted_rrt_4hr"),
+            row.get("predicted_rrt_8hr"),
+            row.get("last_recorded_at"),
+            row.get("sequence"),
+            row.get("patient_id"),
+        ))
 
     # Step 7: Append to history
     avpu_encoded = updated["avpu"].map(AVPU_ENCODING).fillna(0).astype(int)
@@ -428,9 +460,30 @@ def run_synthetic_tick_if_due(
         "avpu_encoded":     avpu_encoded.values,
         "current_rrt_score": updated["current_rrt_score"].values,
     })
-
-    write_header = not os.path.exists(VITAL_HISTORY_FILE)
-    history_chunk.to_csv(VITAL_HISTORY_FILE, mode="a", header=write_header, index=False)
+    for _, row in history_chunk.iterrows():
+        cursor.execute("""
+            INSERT INTO vital_history
+            (patient_id, recorded_at, sequence, heart_rate,
+            respiratory_rate, spo2, systolic_bp, temperature,
+            avpu, avpu_encoded, current_rrt_score)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            row.get("patient_id"),
+            row.get("recorded_at"),
+            row.get("sequence"),
+            row.get("heart_rate"),
+            row.get("respiratory_rate"),
+            row.get("spo2"),
+            row.get("systolic_bp"),
+            row.get("temperature"),
+            row.get("avpu"),
+            row.get("avpu_encoded"),
+            row.get("current_rrt_score"),
+        ))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
 
     # Step 8: Update state
     _save_state({"sequence": end_seq, "last_tick_at": recorded_at})
@@ -451,77 +504,39 @@ def load_patient_history(
     hours_back: int = 8,
     chunksize: int = 20000,
 ) -> pd.DataFrame:
-    """
-    Load vital history for a specific patient from vital_history.csv.
-
-    Args:
-        patient_id: Patient ID string (e.g. "P7001").
-        hours_back: How many hours back to retrieve.
-        chunksize:  Chunk size for reading large files.
-
-    Returns:
-        DataFrame sorted by recorded_at, or empty DataFrame if none found.
-    """
     empty_cols = [
         "recorded_at", "heart_rate", "respiratory_rate",
         "spo2", "systolic_bp", "temperature",
         "avpu", "avpu_encoded", "current_rrt_score",
     ]
-    if not os.path.exists(VITAL_HISTORY_FILE):
-        return pd.DataFrame(columns=empty_cols)
-
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=hours_back)
-    pid    = str(patient_id)
-    chunks: list[pd.DataFrame] = []
-
     try:
-        for chunk in pd.read_csv(VITAL_HISTORY_FILE, chunksize=chunksize):
-            sub = chunk[chunk["patient_id"].astype(str) == pid]
-            if sub.empty:
-                continue
-            sub = sub.copy()
-            sub["recorded_at"] = pd.to_datetime(sub["recorded_at"], utc=True, errors="coerce")
-            sub = sub.dropna(subset=["recorded_at"])
-            sub = sub[sub["recorded_at"] >= cutoff]
-            if not sub.empty:
-                chunks.append(sub)
-
+        conn = get_connection()
+        query = """
+            SELECT recorded_at, heart_rate, respiratory_rate,
+                   spo2, systolic_bp, temperature,
+                   avpu, avpu_encoded, current_rrt_score, sequence
+            FROM vital_history
+            WHERE patient_id = %s
+              AND recorded_at >= DATE_SUB(NOW(), INTERVAL %s HOUR)
+            ORDER BY recorded_at ASC
+        """
+        df = pd.read_sql(query, conn, params=(patient_id, hours_back))
+        conn.close()
+        if df.empty:
+            return pd.DataFrame(columns=empty_cols)
+        return df
     except Exception as exc:
-        logger.warning(f"Failed reading vital history for {patient_id}: {exc}")
+        logger.warning(f"Failed reading vital history for {patient_id} from MySQL: {exc}")
         return pd.DataFrame(columns=empty_cols)
-
-    if not chunks:
-        return pd.DataFrame(columns=empty_cols)
-
-    hist = pd.concat(chunks, ignore_index=True)
-    if "sequence" in hist.columns:
-        hist = hist.drop_duplicates(subset="sequence", keep="last")
-    hist = hist.sort_values("recorded_at").reset_index(drop=True)
-    return hist
-
-
+    
 def load_all_history(chunksize: int = 50000) -> pd.DataFrame:
-    """
-    Load the entire vital_history.csv (for batch BiLSTM prediction).
-
-    Args:
-        chunksize: Read chunk size.
-
-    Returns:
-        Full history DataFrame or empty DataFrame.
-    """
-    if not os.path.exists(VITAL_HISTORY_FILE):
-        return pd.DataFrame()
-
     try:
-        chunks = []
-        for chunk in pd.read_csv(VITAL_HISTORY_FILE, chunksize=chunksize):
-            chunks.append(chunk)
-        if not chunks:
-            return pd.DataFrame()
-        return pd.concat(chunks, ignore_index=True)
+        conn = get_connection()
+        df = pd.read_sql("SELECT * FROM vital_history", conn)
+        conn.close()
+        return df
     except Exception as exc:
-        logger.warning(f"Failed loading vital history: {exc}")
+        logger.warning(f"Failed loading vital history from MySQL: {exc}")
         return pd.DataFrame()
 
 

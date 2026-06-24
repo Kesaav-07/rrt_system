@@ -28,6 +28,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+from db import get_connection
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -168,23 +169,81 @@ hr { border-color:var(--border) !important; }
 
 @st.cache_data(ttl=5)
 def _load_live_records() -> pd.DataFrame:
-    """Load live patient records from CSV."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    if not os.path.exists(LIVE_RECORDS_FILE):
-        return pd.DataFrame()
+    """Load live patient records from MySQL."""
     try:
-        df = pd.read_csv(LIVE_RECORDS_FILE)
-        df["patient_id"] = df["patient_id"].astype(str)
+        conn = get_connection()
+        df = pd.read_sql("SELECT * FROM live_future_records", conn)
+        conn.close()
+        if not df.empty:
+            df["patient_id"] = df["patient_id"].astype(str)
         return df
+
     except Exception as exc:
-        logger.warning(f"Failed to load live records: {exc}")
+        logger.warning(f"Failed to load live records from MySQL: {exc}")
         return pd.DataFrame()
 
 
 def _save_live_records(df: pd.DataFrame) -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    df.to_csv(LIVE_RECORDS_FILE, index=False)
-    st.cache_data.clear()
+    """Save live patient records to MySQL without deleting existing patients."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        for _, row in df.iterrows():
+            cursor.execute("""
+                INSERT INTO live_future_records
+                (patient_id, name, age, ward, block, diagnosis,
+                 respiratory_rate, spo2, heart_rate, systolic_bp,
+                 temperature, avpu, avpu_encoded, current_rrt_score,
+                 rrt_category, predicted_rrt_4hr, predicted_rrt_8hr,
+                 last_recorded_at, sequence)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    name=VALUES(name),
+                    age=VALUES(age),
+                    ward=VALUES(ward),
+                    block=VALUES(block),
+                    diagnosis=VALUES(diagnosis),
+                    respiratory_rate=VALUES(respiratory_rate),
+                    spo2=VALUES(spo2),
+                    heart_rate=VALUES(heart_rate),
+                    systolic_bp=VALUES(systolic_bp),
+                    temperature=VALUES(temperature),
+                    avpu=VALUES(avpu),
+                    avpu_encoded=VALUES(avpu_encoded),
+                    current_rrt_score=VALUES(current_rrt_score),
+                    rrt_category=VALUES(rrt_category),
+                    predicted_rrt_4hr=VALUES(predicted_rrt_4hr),
+                    predicted_rrt_8hr=VALUES(predicted_rrt_8hr),
+                    last_recorded_at=VALUES(last_recorded_at),
+                    sequence=VALUES(sequence)
+            """, (
+                row.get("patient_id"),
+                row.get("name"),
+                row.get("age"),
+                row.get("ward"),
+                row.get("block"),
+                row.get("diagnosis"),
+                row.get("respiratory_rate"),
+                row.get("spo2"),
+                row.get("heart_rate"),
+                row.get("systolic_bp"),
+                row.get("temperature"),
+                row.get("avpu"),
+                row.get("avpu_encoded"),
+                row.get("current_rrt_score"),
+                row.get("rrt_category"),
+                row.get("predicted_rrt_4hr"),
+                row.get("predicted_rrt_8hr"),
+                row.get("last_recorded_at"),
+                row.get("sequence"),
+            ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        st.cache_data.clear()
+
+    except Exception as exc:
+        logger.warning(f"Failed to save live records to MySQL: {exc}")
 
 
 def _next_patient_id(df: pd.DataFrame) -> str:
@@ -408,6 +467,10 @@ def _render_dashboard(df: pd.DataFrame) -> None:
     display_cols  = [c for c in display_cols if c in disp.columns]
 
     ui_df = disp[display_cols].copy()
+    score_cols = ["current_rrt_score", "predicted_rrt_4hr", "predicted_rrt_8hr"]
+    for col in score_cols:
+        if col in ui_df.columns:
+            ui_df[col] = ui_df[col].round(0).astype(int)
     rename_map = {
         "patient_id":         "Patient ID",
         "name":               "Name",

@@ -22,6 +22,8 @@ import sys
 import hashlib
 import secrets
 import pandas as pd
+from config import USERS_FILE, ROLES, DATA_DIR
+from db import get_connection
 import streamlit as st
 from datetime import datetime
 
@@ -42,17 +44,40 @@ def _hash_password(password: str, salt: str) -> str:
 
 
 def _load_users() -> pd.DataFrame:
-    _ensure_data_dir()
-    if not os.path.exists(USERS_FILE):
+    try:
+        conn = get_connection()
+        df = pd.read_sql("SELECT username, salt, password_hash, role, created_at FROM users", conn)
+        conn.close()
+        return df.fillna("")
+    except Exception as exc:
+        st.error(f"Failed to load users from MySQL: {exc}")
         return pd.DataFrame(
             columns=["username", "salt", "password_hash", "role", "created_at"]
         )
-    return pd.read_csv(USERS_FILE, dtype=str).fillna("")
 
 
 def _save_users(df: pd.DataFrame) -> None:
-    _ensure_data_dir()
-    df.to_csv(USERS_FILE, index=False)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM users")
+        for _, row in df.iterrows():
+            cursor.execute("""
+                INSERT INTO users
+                (username, salt, password_hash, role, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                row["username"],
+                row["salt"],
+                row["password_hash"],
+                row["role"],
+                row["created_at"],
+            ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as exc:
+        st.error(f"Failed to save users to MySQL: {exc}")
 
 
 # ---------------------------------------------------------------------------
