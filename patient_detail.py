@@ -340,11 +340,8 @@ def render_risk_score_panel(patient_row: pd.Series) -> None:
 # ---------------------------------------------------------------------------
 
 def render_patient_info_panel(patient_row: pd.Series, user_role: str) -> None:
-    """Render patient information with role-based field visibility."""
+    """Render patient information. All roles can view; only Admin can edit elsewhere."""
     st.markdown('<p class="panel-heading">Patient Information</p>', unsafe_allow_html=True)
-
-    can_view_id = user_role in ("Physician", "Admin", "RRT Team")
-    restricted  = "🔒 Restricted"
 
     def _tile(label: str, value: object) -> str:
         return f"""
@@ -354,18 +351,14 @@ def render_patient_info_panel(patient_row: pd.Series, user_role: str) -> None:
         </div>
         """
 
-    name_disp      = patient_row.get("name", "Not recorded") if can_view_id else restricted
-    diag_disp      = patient_row.get("diagnosis", "—")        if can_view_id else restricted
-    physician_disp = patient_row.get("attending_physician", "—") if user_role in ("Physician", "Admin") else restricted
-
     fields = [
         ("Patient ID",          patient_row.get("patient_id",  "—")),
-        ("Name",                name_disp),
-        ("Age",                 patient_row.get("age",         "—")),
-        ("Ward",                patient_row.get("ward",        "—")),
-        ("Block",               patient_row.get("block",       "—")),
-        ("Diagnosis",           diag_disp),
-        ("Attending Physician", physician_disp),
+        ("Name",                patient_row.get("name", "Not recorded")),
+        ("Age",                 patient_row.get("age", "—")),
+        ("Ward",                patient_row.get("ward", "—")),
+        ("Block",               patient_row.get("block", "—")),
+        ("Diagnosis",           patient_row.get("diagnosis", "—")),
+        ("Attending Physician", patient_row.get("attending_physician", "—")),
         ("Admission Date",      patient_row.get("admission_date", "—")),
         ("RRT Category",        patient_row.get("rrt_category", "—")),
     ]
@@ -374,9 +367,6 @@ def render_patient_info_panel(patient_row: pd.Series, user_role: str) -> None:
     for i, (label, value) in enumerate(fields):
         with cols[i % 2]:
             st.markdown(_tile(label, value), unsafe_allow_html=True)
-
-    if not can_view_id:
-        st.caption("🔒 Some fields restricted for your role. Contact Admin for access.")
 
 
 # ---------------------------------------------------------------------------
@@ -577,10 +567,18 @@ def render_vital_trends_panel(patient_row: pd.Series) -> None:
     )
 
     st.plotly_chart(fig, use_container_width=True)
-    st.caption(
-        "🟢 Green band = normal range · 🔴 Red points = abnormal · "
-        "🟡 Dashed = RRT score (right axis)"
-    )
+    st.markdown("""
+        <div style="
+            color:#0B2545;
+            font-size:0.82rem;
+            font-weight:600;
+            margin-top:0.4rem;
+        ">
+        🟢 Green band = normal range &nbsp;&nbsp;
+        🔴 Red points = abnormal &nbsp;&nbsp;
+        🟡 Dashed = RRT score (right axis)
+        </div>
+    """, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------

@@ -1,23 +1,3 @@
-"""
-app.py
-------
-Main entry point for the RRT BiLSTM Surveillance Dashboard.
-
-Features:
-    - Role-based authentication (Nurse, Physician, RRT Team, Admin)
-    - Real-time patient monitoring with 60-second auto-refresh
-    - 18-point RRT scoring (current, 4h forecast, 8h forecast)
-    - Bi-LSTM powered deterioration forecasting
-    - Patient registration (Nurses)
-    - Priority queue sorted by predicted 8h RRT
-    - Alert system for critical patients
-    - Patient detail deep-dive page
-    - Admin user management panel
-
-Run:
-    streamlit run app.py
-"""
-
 from __future__ import annotations
 
 import os
@@ -159,6 +139,11 @@ div[data-testid="stDataFrame"] { border:1px solid var(--border); border-radius:1
 
 .section-label { font-family:'IBM Plex Mono',monospace; font-size:0.72rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--teal-dark); margin-bottom:-0.4rem; }
 hr { border-color:var(--border) !important; }
+.rrt-alert-box,
+.rrt-alert-box * {
+    color: #D7263D !important;
+    font-weight: 700 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -422,13 +407,34 @@ def _render_dashboard(df: pd.DataFrame) -> None:
         alert_ids = ", ".join(alerts_df["patient_id"].astype(str).tolist()[:10])
         if len(alerts_df) > 10:
             alert_ids += f" … (+{len(alerts_df) - 10} more)"
-        st.error(
-            f"🚨 **RRT ALERT** — {len(alerts_df)} patient(s) require immediate attention: {alert_ids}"
+        st.markdown(
+           f"""
+           <div class="rrt-alert-box" style="
+                background-color:#F8D7DA;
+                font-weight:700;
+                padding:0.9rem 1rem;
+                border-radius:8px;
+                margin:1rem 0;
+                border-left:5px solid #D7263D;
+            ">
+            🚨 RRT ALERT — {len(alerts_df)} patient(s) require immediate attention: {alert_ids}
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
     # Filters
     st.markdown('<p class="section-label">WARD CENSUS</p>', unsafe_allow_html=True)
-    st.subheader("Priority Queue — Live Triage Board")
+    st.markdown("""
+        <h3 style="
+        color:#0B2545;
+        font-weight:700;
+        margin-top:0.2rem;
+        margin-bottom:1rem;
+        ">
+        Priority Queue — Live Triage Board
+        </h3>
+    """, unsafe_allow_html=True)
 
     if df.empty:
         st.info("No patients registered yet. Use the sidebar form to register the first patient.")
@@ -538,7 +544,16 @@ def _render_risk_trajectory(disp: pd.DataFrame) -> None:
 
     st.markdown("---")
     st.markdown('<p class="section-label">FORECAST DETAIL</p>', unsafe_allow_html=True)
-    st.subheader("Risk Trajectory — Now / +4h / +8h")
+    st.markdown("""
+        <h3 style="
+            color:#0B2545;
+            font-weight:700;
+            margin-top:0.2rem;
+            margin-bottom:1rem;
+        ">
+        Risk Trajectory — Now / +4h / +8h
+        </h3>
+    """, unsafe_allow_html=True)
 
     selected_id = st.selectbox(
         "Select patient:", disp["patient_id"].unique().tolist(), key="trajectory_picker"
@@ -676,7 +691,7 @@ last_tick_str = last_tick_dt.astimezone().strftime("%H:%M:%S") if last_tick_dt e
 st.markdown(f"""
 <div class="hero-banner">
     <span class="hero-kicker"><span class="live-dot"></span>LIVE TRIAGE FEED · RRT BI-LSTM</span>
-    <div class="hero-title">AI Patient Deterioration Forecasting Dashboard</div>
+    <div class="hero-title">Patient Deterioration Forecasting Dashboard</div>
     <p class="hero-subtitle">
         18-Point RRT Scoring · Bidirectional LSTM 4h &amp; 8h Deterioration Forecasts · Real-Time Monitoring
     </p>
